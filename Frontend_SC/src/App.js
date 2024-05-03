@@ -1,184 +1,196 @@
-import { useState, useEffect } from 'react';
-import { NFTStorage, File } from 'nft.storage'
-import { Buffer } from 'buffer';
-import { ethers } from 'ethers';
-import axios from 'axios';
+import { useState, useEffect } from "react";
+import { NFTStorage, File } from "nft.storage";
+import { Buffer } from "buffer";
+import { ethers } from "ethers";
+import axios from "axios";
 
 // Components
-import Spinner from 'react-bootstrap/Spinner';
-import Navigation from './components/Navigation';
+import Spinner from "react-bootstrap/Spinner";
+import Navigation from "./components/Navigation";
 
 // ABIs
-import NFT from './abis/NFT.json'
+import NFT from "./abis/MyAINFT.json";
 
 // Config
-import config from './config.json';
+import config from "./config.json";
 
 function App() {
-  const [data, setData] = useState('');
-  const [provider, setProvider] = useState(null)
-  const [account, setAccount] = useState(null)
-  const [nft, setNFT] = useState(null)
+  const [provider, setProvider] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [nft, setNFT] = useState(null);
 
-  const [name, setName] = useState("")
-  const [description, setDescription] = useState("")
-  const [image, setImage] = useState(null)
-  const [url, setURL] = useState(null)
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [image, setImage] = useState(null);
+  const [url, setURL] = useState(null);
+  const [file, setFile] = useState(null);
 
-  const [message, setMessage] = useState("")
-  const [isWaiting, setIsWaiting] = useState(false)
+  const [message, setMessage] = useState("");
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [isGenerated, setIsGenerated] = useState(false);
+  const [isMinted, setIsMinted] = useState(false);
 
   const loadBlockchainData = async () => {
-    const provider = new ethers.providers.Web3Provider(window.ethereum)
-    setProvider(provider)
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    setProvider(provider);
 
-    const network = await provider.getNetwork()
+    const network = await provider.getNetwork();
+    console.log("network name", network.name);
+    const nft = new ethers.Contract(
+      config[network.name].nft.address,
+      NFT,
+      provider
+    );
+    console.log("nft instance from loadBlockchainData", nft);
+    setNFT(nft);
+  };
 
-    const nft = new ethers.Contract(config[network.chainId].nft.address, NFT, provider)
-    setNFT(nft)
-  }
-
-  const submitHandler = async (e) => {
-    e.preventDefault()
-
-    if (name === "" || description === "") {
-      window.alert("Please provide a name and description")
-      return
+  const createImage = async (e) => {
+    e.preventDefault();
+    if (description === "") {
+      window.alert("Please provide a description");
+      return;
     }
+    setIsMinted(false);
+    setIsWaiting(true);
+    setMessage("Generating Image...");
 
-    setIsWaiting(true)
+    // You can replace this with different model API's
+    const URL = `https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2`;
 
-    // Call AI API to generate a image based on description
-    const imgData= await createImage();
-    console.log("imageData m submit =", imgData);
-    // Upload image to IPFS (NFT.Storage)
-    const url = await uploadImage(imgData, name, description)
+    // Send the request
+    const response = await axios({
+      url: URL,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.REACT_APP_HUGGING_FACE_API_KEY}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      data: JSON.stringify({
+        inputs: description,
+        options: { wait_for_model: true },
+      }),
+      responseType: "arraybuffer",
+    });
 
-    // Mint NFT
-    //await mintImage(url)
+    const type = response.headers["content-type"];
+    const data = response.data;
 
-    setIsWaiting(false)
-    setMessage("")
-  }
+    const base64data = Buffer.from(data).toString("base64");
+    const img = `data:${type};base64,` + base64data; // <-- This is so we can render it on the page
+    setImage(img);
 
-  const createImage = async () => {
-    setMessage("Generating Image...")
-    const prompt= description;
-    const apiKey = 'VFXhX3yjdyBZlwsMmfiLYsKmvz7XxBsjVqFgsENRNj6DP49uf8ASzkKPLQuh';
-    console.log("promt before api call=", prompt);
-    console.log('Generating Images....');
-    try {
-      
-      const numberOfPics = 1;
-      console.log("prompt from front=",prompt);
-      const bodyInfo = JSON.stringify({
-        key: apiKey,
-        prompt: prompt,
-        negative_prompt: null,
-        width: "512",
-        height: "512",
-        samples: numberOfPics,
-        num_inference_steps: "30",
-        safety_checker: "no",
-        enhance_prompt: "yes",
-        seed: null,
-        guidance_scale: 7.5,
-        webhook: null,
-        track_id: null,
-      });
-  
-      
-      const result = await axios.post("https://stablediffusionapi.com/api/v3/text2img", bodyInfo, {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-  
-      
-      //await download(result.data.output[i], number + ".png");
-      console.log('Generated Pic m front');
-      console.log('Api result= ',  result.data.output[0]);
-      const img= result.data.output[0];
-      setImage(img)
-      return img;
-    }catch (error) {
-      console.error(error);
-      
-    }
-    
-  }
+    setIsGenerated(true);
 
-  const uploadImage = async (imageData, name, description) => {
-    setMessage("Uploading Image...")
+    const ipfsFile = new File([data], "image.jpeg", { type: "image/jpeg" });
+
+    setFile(ipfsFile);
+
+    setIsWaiting(false);
+    setMessage("");
+  };
+
+  const uploadImage = async () => {
+    setIsWaiting(true);
+    setMessage("Uploading Image...");
 
     // Create instance to NFT.Storage
-    const nftstorage = new NFTStorage({ token: process.env.REACT_APP_NFT_STORAGE_API_KEY })
+    const nftstorage = new NFTStorage({
+      token: process.env.REACT_APP_NFT_STORAGE_API_KEY,
+    });
 
     // Send request to store image
     const { ipnft } = await nftstorage.store({
-      image: new File([imageData], "image.png", { type: "image/png" }),
+      image: file,
       name: name,
       description: description,
-    })
+    });
 
     // Save the URL
-    console.log("ipft nft storage=",ipnft);
-    const url = `https://ipfs.io/ipfs/${ipnft}/metadata.json`
-    setURL(url)
+    const url = `https://ipfs.io/ipfs/${ipnft}/metadata.json`;
+    setURL(url);
+    console.log("url from IPFS upload image: ", url);
+  };
 
-    return url
-  }
+  const mintImage = async (e) => {
+    e.preventDefault();
+    // Upload image to IPFS (NFT.Storage)
+    await uploadImage();
 
-  // const mintImage = async (tokenURI) => {
-  //   setMessage("Waiting for Mint...")
+    // Mint NFT
+    setMessage("Waiting for Mint...");
 
-  //   const signer = await provider.getSigner()
-  //   const transaction = await nft.connect(signer).mint(tokenURI, { value: ethers.utils.parseUnits("1", "ether") })
-  //   await transaction.wait()
-  // }
-
-  // const fileFromPath = async (filePath) => {
-  //   const content = await fs.promises.readFile(filePath)
-  //   const type = mime.getType(filePath)
-  //   return new File([content], path.basename(filePath), { type })
-
-  // }
-
+    const signer = await provider.getSigner();
+    console.log("signer from mint nft", signer);
+    const transaction = await nft.connect(signer).mintNFT(url);
+    console.log("transaction from mint nft", transaction);
+    console.log("nft from mint nft", nft);
+    //await transaction.wait();
+    setIsGenerated(false);
+    setIsWaiting(false);
+    setIsMinted(true);
+    setName(null);
+    setDescription(null);
+  };
 
   useEffect(() => {
-    loadBlockchainData()
-  }, [])
+    loadBlockchainData();
+  }, []);
 
-  return (<div>
-    <Navigation account={account} setAccount={setAccount} />
+  return (
+    <div>
+      <Navigation account={account} setAccount={setAccount} />
 
-    <div className='form'>
-      <form onSubmit={submitHandler}>
-        <input type="text" placeholder="Create a name..." onChange={(e) => { setName(e.target.value) }} />
-        <input type="text" placeholder="Create a description..." onChange={(e) => setDescription(e.target.value)} />
-        <input type="submit" value="Create & Mint" />
-      </form>
-
-      <div className="image">
-        {!isWaiting && image ? (
-          <img src={image} alt="AI generated image" />
-        ) : isWaiting ? (
-          <div className="image__placeholder">
-            <Spinner animation="border" />
-            <p>{message}</p>
-          </div>
+      <div className="form">
+        {!isGenerated ? (
+          <form onSubmit={createImage}>
+            <input
+              id="description"
+              type="text"
+              placeholder="Create a description..."
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <input id="Generate" type="submit" value="Generate Image" />
+          </form>
         ) : (
-          <></>
+          isGenerated &&
+          image && (
+            <form onSubmit={mintImage}>
+              <input
+                id="name"
+                type="text"
+                placeholder="Type a name for your NFT..."
+                onChange={(e) => setName(e.target.value)}
+              />
+              <input id="mint" type="submit" value="Upload to IPFS & Mint" />
+            </form>
+          )
         )}
-      </div>
-    </div>
 
-    {!isWaiting && url && (
-      <p>
-        View&nbsp;<a href={url} target="_blank" rel="noreferrer">Metadata</a>
-      </p>
-    )}
-  </div>
+        <div className="image">
+          {!isWaiting && image ? (
+            <img src={image} alt="AI generated image" />
+          ) : isWaiting ? (
+            <div className="image__placeholder">
+              <Spinner animation="border" />
+              <p>{message}</p>
+            </div>
+          ) : (
+            !isWaiting && url && <img src={image} alt="AI generated image" />
+          )}
+        </div>
+      </div>
+
+      {!isWaiting && isMinted && (
+        <p>
+          NFT is Minted, View&nbsp;
+          <a href={url} target="_blank" rel="noreferrer">
+            Metadata
+          </a>
+        </p>
+      )}
+    </div>
   );
 }
 
